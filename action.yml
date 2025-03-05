@@ -1,0 +1,92 @@
+name: "CNF-Testsuite - CNF Best practices"
+description: "Installs and runs CNF-Testsuite"
+inputs:
+  version:
+    description: "CNF-Testsuite version to use (default: latest)"
+    required: false
+  cnf_config:
+    description: "CNF cnnfiguration file"
+    required: false
+  helm_chart_dir:
+    description: "Local directory with a helm chart of CNF to test"
+    required: false
+  install_kind:
+    description: "Install kind to for CNF tests"
+    required: false
+    default: false
+  tests:
+    description: "Set of tests to execute"
+    required: false
+  gist_badge_secret:
+    description: "Gist secret for badge"
+    required: false
+  gist_badge_id:
+    description: "Gist badge id"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - name: Create custom Kind config
+      run: |
+         cat <<EOF > kind-config.yaml
+         kind: Cluster
+         apiVersion: kind.x-k8s.io/v1alpha4
+         nodes:
+           - role: control-plane
+           - role: worker
+           - role: worker
+         EOF
+      shell: bash
+    - name: assure kind is deployed
+      uses: helm/kind-action@v1
+      with:
+        config: kind-config.yaml
+        cluster_name: cnf-testsuite-kind
+    - name: assure helm is instaled
+      run: |
+         if ! command -v helm &> /dev/null; then
+           echo "Helm not found, installing..."
+           curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+         fi
+      shell: bash
+    - name: Install cnf-testsuite
+      run: source <(curl -s https://raw.githubusercontent.com/lfn-cnti/testsuite/main/curl_install.sh)
+      shell: bash
+    - name: Setup cnf-testsuite
+      run: |
+        ~/.cnf-testsuite/cnf-testsuite setup
+      shell: bash
+    - name: Install CNF
+      run: |
+        cat <<EOF > cnf_config.yml
+        ---
+        config_version: v2
+        deployments:
+          helm_dirs:
+          - name: cnf
+            helm_directory: "${{ inputs.helm_chart_dir }}"
+        EOF
+        ~/.cnf-testsuite/cnf-testsuite cnf_install cnf-config=cnf_config.yml
+      shell: bash
+    - name: Run cnf-testsuite tests
+      run: |
+        ~/.cnf-testsuite/cnf-testsuite cert | while IFS= read -r line; do
+          echo "$line"
+          if [[ $line =~ ([0-9]+)\ of\ ([0-9]+)\ total\ tests\ passed ]]; then
+            passed_tests=${BASH_REMATCH[1]}
+            total_tests=${BASH_REMATCH[2]}
+            echo "passed_tests=$passed_tests" >> $GITHUB_ENV
+            echo "total_tests=$total_tests" >> $GITHUB_ENV
+          fi
+        done 
+      shell: bash
+    - name: Update badge
+      uses: schneegans/dynamic-badges-action@v1.7.0
+      with:
+        auth: ${{ inputs.gist_badge_secret }}
+        gistID: ${{ inputs.gist_badge_id }}
+        filename: cnti_badge.svg
+        label: "CNTi essentials"
+        message: "${{ env.passed_tests }} of ${{ env.total_tests }}"
+        labelColor: aqua
+        color: green
